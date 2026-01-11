@@ -1,0 +1,243 @@
+# %%
+# Импорт необходимых библиотек
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch  # Для легенды barh-графика
+
+#  ШАГ 1: Загрузка и первичная обработка данных 
+
+print("=" * 60)
+print("ШАГ 1: Загрузка и первичная обработка данных")
+print("=" * 60)
+
+# Загрузка данных ВВП по ППС (GDP, PPP)
+df_gdp = pd.read_csv('API_NY.GDP.MKTP.PP.KD_DS2_en_csv_v2_6298251.csv', skiprows=4, encoding='utf-8')
+# Загрузка данных военных расходов
+df_military = pd.read_csv('API_MS.MIL.XPND.CD_DS2_en_csv_v2_6298190.csv', skiprows=4, encoding='utf-8')
+
+print(f"ВВП: {df_gdp.shape}")
+print(f"Колонки ВВП:\n{df_gdp.columns.tolist()[:10]}...")
+print(f"\nРазмер военных расходов: {df_military.shape}\n")
+print("Первые 5 строк ВВП:")
+print(df_gdp.head())
+print(f"\nТипы данных в ВВП:")
+print(df_gdp.dtypes.head())
+
+#  ШАГ 2: Фильтрация по G7 и BRICS 
+
+print("\n" + "=" * 60)
+print("ШАГ 2: Фильтрация и категоризация стран")
+print("=" * 60)
+
+G7 = [
+    'United States', 'Japan', 'Germany', 'United Kingdom',
+    'France', 'Italy', 'Canada'
+]
+BRICS = [
+    'Brazil', 'Russian Federation', 'India', 'China', 'South Africa'
+    # расширения с 2024 тут пока не учитываем
+]
+print(f"Страны G7: {G7}")
+print(f"Страны BRICS: {BRICS}")
+
+all_selected = G7 + BRICS
+df_gdp_filt = df_gdp[df_gdp['Country Name'].isin(all_selected)].copy()
+df_military_filt = df_military[df_military['Country Name'].isin(all_selected)].copy()
+
+print(f"\nСтран в ВВП: {len(df_gdp_filt)}")
+print(f"Стран в военных расходах: {len(df_military_filt)}")
+
+def assign_bloc(name):
+    if name in G7:
+        return "G7"
+    elif name in BRICS:
+        return "BRICS"
+    return "Other"
+
+df_gdp_filt['Bloc'] = df_gdp_filt['Country Name'].apply(assign_bloc)
+df_military_filt['Bloc'] = df_military_filt['Country Name'].apply(assign_bloc)
+
+print("\nРаспределение по блокам:")
+print(df_gdp_filt['Bloc'].value_counts())
+
+#  ШАГ 3: Очистка и подготовка 
+print("\n" + "=" * 60)
+print("ШАГ 3: Очистка и трансформация данных")
+print("=" * 60)
+
+year_cols = [c for c in df_gdp_filt.columns if c.isdigit()]
+df_gdp_cl = df_gdp_filt[['Country Name', 'Bloc'] + year_cols].copy()
+df_military_cl = df_military_filt[['Country Name', 'Bloc'] + year_cols].copy()
+
+print(f"Колонки в очищенном тейбле ВВП: {df_gdp_cl.columns.tolist()[:5]}...")
+
+print(f"\nПропущенных значений в данных ВВП: {df_gdp_cl[year_cols].isna().sum().sum()}")
+df_gdp_cl[year_cols] = df_gdp_cl[year_cols].fillna(0)
+print(f"Пропущенных значений после обработки: {df_gdp_cl[year_cols].isna().sum().sum()}")
+
+#  ШАГ 4: Агрегация данных по блокам и годам 
+
+print("\n" + "=" * 60)
+print("ШАГ 4: Агрегация данных по блокам")
+print("=" * 60)
+
+df_gdp_long = pd.melt(
+    df_gdp_cl,
+    id_vars=['Country Name', 'Bloc'],
+    value_vars=year_cols,
+    var_name='Year',
+    value_name='GDP'
+)
+df_gdp_long['Year'] = df_gdp_long['Year'].astype(int)
+df_gdp_long = df_gdp_long[df_gdp_long['Year'] >= 1990]
+
+print(f"Количество записей в новом формате: {len(df_gdp_long)}")
+print(f"Диапазон годов: {df_gdp_long['Year'].min()} - {df_gdp_long['Year'].max()}")
+
+df_gdp_grp = df_gdp_long.groupby(['Year', 'Bloc'])['GDP'].sum().reset_index()
+df_gdp_grp['GDP_trillions'] = df_gdp_grp['GDP'] / 1e12
+
+print("\nПример агрегированных данных:")
+print(df_gdp_grp.head(10))
+
+df_pivot = df_gdp_grp.pivot(index='Year', columns='Bloc', values='GDP_trillions')
+
+print("\nСводная таблица (первые 5 лет):")
+print(df_pivot.head())
+
+#  ШАГ 5: Визуализация динамики ВВП блоков 
+
+print("\n" + "=" * 60)
+print("ШАГ 5: Визуализация динамики ВВП")
+print("=" * 60)
+
+plt.figure(figsize=(14, 8))
+plt.plot(df_pivot.index, df_pivot['G7'], label='G7', color='blue', linewidth=3, marker='o', markersize=6)
+plt.plot(df_pivot.index, df_pivot['BRICS'], label='BRICS', color='red', linewidth=3, marker='s', markersize=6)
+plt.title('Динамика совокупного ВВП (по ППС): G7 vs BRICS (1990-2023)', fontsize=16, fontweight='bold', pad=20)
+plt.xlabel('Год', fontsize=12)
+plt.ylabel('ВВП (триллионы USD, по ППС)', fontsize=12)
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.legend(fontsize=12, loc='upper left')
+plt.xticks(rotation=45)
+plt.xlim(1990, df_pivot.index.max())
+plt.tight_layout()
+plt.show()
+
+#  ШАГ 6: Дополнительные графики 
+
+print("\n" + "=" * 60)
+print("ШАГ 6: Дополнительные графики")
+print("=" * 60)
+
+plt.figure(figsize=(14, 8))
+years = sorted(df_pivot.index)
+g7_vals = [df_pivot.loc[year, 'G7'] for year in years]
+brics_vals = [df_pivot.loc[year, 'BRICS'] for year in years]
+
+plt.stackplot(years, g7_vals, brics_vals,
+              labels=['G7', 'BRICS'],
+              colors=['#1f77b4', '#ff7f0e'], alpha=0.8)
+
+plt.title('Доля блоков в общей экономике (G7 + BRICS)', fontsize=16, fontweight='bold', pad=20)
+plt.xlabel('Год', fontsize=12)
+plt.ylabel('Совокупный ВВП (триллионы USD)', fontsize=12)
+plt.legend(loc='upper left', fontsize=12)
+plt.grid(axis='y', linestyle='--', alpha=0.5)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+latest_year = df_pivot.index.max()
+print(f"\nАнализ данных за {latest_year} год:")
+
+latest_data = df_gdp_long[df_gdp_long['Year'] == latest_year].copy()
+latest_data['GDP_trillions'] = latest_data['GDP'] / 1e12
+latest_data = latest_data.sort_values('GDP_trillions', ascending=True)
+
+plt.figure(figsize=(14, 10))
+color_map = latest_data['Bloc'].map({'G7': 'blue', 'BRICS': 'red'})
+plt.barh(latest_data['Country Name'], latest_data['GDP_trillions'], color=color_map, alpha=0.7)
+
+plt.title(f'Вклад отдельных стран в экономику блоков ({latest_year} год)', fontsize=16, fontweight='bold', pad=20)
+plt.xlabel('ВВП (триллионы USD, по ППС)', fontsize=12)
+plt.ylabel('Страна', fontsize=12)
+plt.grid(axis='x', linestyle='--', alpha=0.5)
+
+for i, (value, country) in enumerate(zip(latest_data['GDP_trillions'], latest_data['Country Name'])):
+    plt.text(value + 0.1, i, f'{value:.2f}', va='center', fontsize=10)
+
+legend_elements = [
+    Patch(facecolor='blue', alpha=0.7, label='G7'),
+    Patch(facecolor='red', alpha=0.7, label='BRICS')
+]
+plt.legend(handles=legend_elements, fontsize=12)
+plt.tight_layout()
+plt.show()
+
+#  ШАГ 7: Аналитические расчеты 
+
+print("\n" + "=" * 60)
+print("ШАГ 7: Аналитические расчеты")
+print("=" * 60)
+
+df_analysis = df_pivot.copy()
+df_analysis['G7_growth'] = df_analysis['G7'].pct_change() * 100
+df_analysis['BRICS_growth'] = df_analysis['BRICS'].pct_change() * 100
+df_analysis['Difference'] = df_analysis['BRICS'] - df_analysis['G7']
+df_analysis['Ratio'] = df_analysis['BRICS'] / df_analysis['G7']
+
+print("\nКлючевые показатели за последние 5 лет:")
+print(df_analysis.tail())
+print(f"\nСреднегодовой темп роста (1990-{latest_year}):")
+print(f"G7: {df_analysis['G7_growth'].mean():.2f}%")
+print(f"BRICS: {df_analysis['BRICS_growth'].mean():.2f}%")
+print(f"\nОтношение ВВП BRICS к G7:")
+print(f"1990 год: {df_analysis.loc[1990, 'Ratio']:.2%}")
+print(f"{latest_year} год: {df_analysis.loc[latest_year, 'Ratio']:.2%}")
+
+cross_year = None
+for year in range(2010, latest_year + 1):
+    if year in df_analysis.index and year-1 in df_analysis.index:
+        if (df_analysis.loc[year, 'Difference'] > 0 and df_analysis.loc[year-1, 'Difference'] <= 0):
+            cross_year = year
+            break
+
+if cross_year:
+    print(f"\nГод, когда ВВП BRICS превысил ВВП G7: {cross_year}")
+    print(f"ВВП G7 в {cross_year}: {df_analysis.loc[cross_year, 'G7']:.2f} трлн")
+    print(f"ВВП BRICS в {cross_year}: {df_analysis.loc[cross_year, 'BRICS']:.2f} трлн")
+else:
+    print(f"\nBRICS еще не превысил G7 по совокупному ВВП")
+    print(f"Разница в {latest_year}: {df_analysis.loc[latest_year, 'Difference']:.2f} трлн")
+
+#  ШАГ 8: Аналитический вывод 
+
+print("\n" + "=" * 60)
+print("ШАГ 8: Аналитический вывод")
+print("=" * 60)
+
+print("""
+АНАЛИТИЧЕСКИЙ ВЫВОД:
+
+1. ТРЕНДЫ РАЗВИТИЯ:
+   - За последние ~30 лет BRICS устойчиво наращивает долю в мировой экономике, G7 постепенно уступает позиции.
+   - Среднегодовые темпы роста BRICS выше G7.
+
+2. ПЕРЕЛОМНЫЕ МОМЕНТЫ:
+   - 2000-2010: ускорение экономик BRICS.
+   - Глобальный кризис 2008 года сильнее сказался на G7.
+   - BRICS может обогнать G7 по ВВП в ближайшие годы.
+
+3. СТРУКТУРНЫЕ ИЗМЕНЕНИЯ:
+   - В BRICS заметно доминирует Китай.
+   - В G7 наибольший вклад у США, но их доля постепенно снижается.
+
+4. ПЕРСПЕКТИВЫ:
+   - Центр мировой экономики смещается к группам развивающихся стран.
+   - Возможное дальнейшее расширение BRICS ускорит этот процесс.
+""")
+
+
+
